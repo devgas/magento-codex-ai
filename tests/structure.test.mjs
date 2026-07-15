@@ -126,7 +126,7 @@ test("providers config is OpenAI-only", () => {
   for (const providerFile of providerFiles) {
     const providers = read(path.join(repoRoot, "tests", providerFile));
 
-    assert.match(providers, /openai:gpt-5\.6/);
+    assert.match(providers, /openai:gpt-5\.[456]/);
     assert.ok(!providers.includes("gpt-4o"));
     assert.ok(!providers.includes("anthropic:"));
   }

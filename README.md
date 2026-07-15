@@ -40,11 +40,17 @@ npm run test:promptfoo
 
 Set `OPENAI_API_KEY` before running promptfoo-based tests.
 
-Current model mapping:
+Current default model mapping:
 
-- `skills/*`: `gpt-5.6-terra` with `reasoning.effort: low`
-- most `agent-skills/*`: `gpt-5.6-terra` with `reasoning.effort: medium`
+- `skills/*`: `gpt-5.4` with `reasoning.effort: low`
+- most `agent-skills/*`: `gpt-5.5` with `reasoning.effort: medium`
 - deep review agents (`code-review`, `performance-auditor`, `search`, `sql`, `cron`): `gpt-5.6` with `reasoning.effort: high`
+
+Fallback workflow:
+
+- `npm run test:promptfoo:skills:fallback` retries skills as `gpt-5.4 -> gpt-5.5 -> gpt-5.6`
+- `npm run test:promptfoo:agents:fallback` retries agents as `gpt-5.5 -> gpt-5.6`
+- `npm run test:promptfoo:fallback` runs both staged fallback flows
 
 ## Structure
 
@@ -73,8 +79,9 @@ magento-codex-ai/
 - Removed Claude-native subagent packaging from the delivered repo shape
 - Switched installation docs to `~/.codex/skills`
 - Fixed broken companion-skill links in `agent-skills/`
-- Replaced Anthropic promptfoo provider defaults with GPT-5.6-based OpenAI profiles
+- Replaced Anthropic promptfoo provider defaults with GPT-5.x OpenAI profiles
 - Split providers by workload so skills, standard agents, and deep-review agents do not all use the same reasoning budget
+- Added staged fallback scripts so promptfoo runs can escalate to stronger models when the base tier fails
 - Added a local `node:test` suite that validates file counts, frontmatter, links, and Codex-facing docs
 
 ## Attribution
