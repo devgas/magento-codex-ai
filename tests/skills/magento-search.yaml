@@ -1,0 +1,129 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for skills/magento-search.md
+
+prompts:
+  - file://../prompts/skill-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 120000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Engine matrix — ES7 / ES8 / OpenSearch per Magento version"
+    vars:
+      system_prompt: "file://../../skills/magento-search/SKILL.md"
+      user_input: >
+        We're on Magento 2.4.7. Which search engines are supported, and which
+        should we pick if licensing matters to us?
+    assert:
+      - type: regex
+        value: "elasticsearch7|elasticsearch8|opensearch"
+      - type: llm-rubric
+        value: >
+          The response correctly states that Magento 2.4.7 supports
+          Elasticsearch 7, Elasticsearch 8, and OpenSearch 2.x, and that BOTH
+          the elasticsearch7 and elasticsearch8 Magento modules are deprecated
+          by Adobe — OpenSearch is the strategic forward path. It notes that
+          ES 7.11+ shifted to the Elastic License 2.0 / SSPL (not OSI-approved)
+          and that OpenSearch is Apache 2.0 (NOT MIT). The recommendation
+          when licensing matters is OpenSearch. ES 8 is presented only as a
+          deprecated short-term option for existing installs, never as the
+          recommended target for new work.
+
+  - description: "AWS OpenSearch Service env.php — port 443, basic auth over HTTPS, no SigV4 emphasis"
+    vars:
+      system_prompt: "file://../../skills/magento-search/SKILL.md"
+      user_input: >
+        Show me the env.php block for connecting Magento to AWS OpenSearch Service.
+    assert:
+      - type: contains
+        value: "443"
+      - type: regex
+        value: "opensearch_username|enable_auth|basic auth|HTTPS"
+      - type: llm-rubric
+        value: >
+          The env.php block sets engine=opensearch, the AWS domain endpoint as
+          opensearch_server_hostname, port 443, opensearch_enable_auth=1, and
+          username/password for the master user (basic auth over HTTPS). The
+          response leads with this working configuration. SigV4 / IAM signing
+          may be mentioned only as a niche aside, NOT as the primary connection
+          path. It does not present VPC design or IAM policy JSON as a
+          precondition for getting Magento to talk to AWS OpenSearch.
+
+  - description: "ES 8 security mandatory — never disable enable_auth as a fix"
+    vars:
+      system_prompt: "file://../../skills/magento-search/SKILL.md"
+      user_input: >
+        After upgrading to ES 8 we get HTTP 401 from the search endpoint. Should
+        we set enable_auth to 0 to make it work like ES 7?
+    assert:
+      - type: regex
+        value: "enable_auth.*1|credentials|username|password"
+      # "enable_auth => 0" must not be RECOMMENDED. The model is allowed to
+      # quote the value when refusing it ("don't set enable_auth => 0").
+      # Require a refusal/negation marker in the 250 chars preceding each
+      # occurrence.
+      - type: javascript
+        value: |
+          const phrase = "enable_auth => 0";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|dangerous|refuse[ds]?|refusing)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal/negation marker anywhere — model is recommending disabling auth" };
+      - type: llm-rubric
+        value: >
+          The response refuses to recommend disabling auth on ES 8. It explains
+          that ES 8 ships security-on-by-default (HTTPS + credentials are
+          mandatory) and the correct fix is to set enable_auth=1 with valid
+          username and password in env.php (or via bin/magento config:set
+          --encrypt). Disabling auth is presented as wrong, not as an option.
+
+  - description: "Disk watermark read-only — must free disk before clearing the block"
+    vars:
+      system_prompt: "file://../../skills/magento-search/SKILL.md"
+      user_input: >
+        Our cluster suddenly stopped accepting writes and indexer reports
+        "FORBIDDEN/12/index read-only". The search index has flipped to
+        read_only_allow_delete: true. How do I fix this?
+    assert:
+      - type: regex
+        value: "watermark|disk|read_only_allow_delete|free.*space|free.*disk"
+      - type: llm-rubric
+        value: >
+          The response identifies the disk high watermark (default 95%) being
+          breached as the root cause. It instructs the user to FIRST free disk
+          space (delete old _vN indices that aren't aliased, expand the volume),
+          and only THEN clear the read_only_allow_delete block via
+          PUT /<index>/_settings. It explicitly states that clearing the block
+          without freeing disk will cause the watermark to trip again within
+          minutes.
+
+  - description: "Searchable attributes — is_searchable / is_filterable plus mandatory reindex"
+    vars:
+      system_prompt: "file://../../skills/magento-search/SKILL.md"
+      user_input: >
+        I changed an attribute's "Use in Search" setting from No to Yes in the
+        admin. Why isn't it being used in search results yet?
+    assert:
+      - type: regex
+        value: "indexer:reindex|catalogsearch_fulltext|reindex"
+      - type: llm-rubric
+        value: >
+          The response explains that toggling is_searchable (or
+          is_filterable_in_search) requires a full reindex of
+          catalogsearch_fulltext for the change to be reflected in the search
+          index. It gives the bin/magento indexer:reindex catalogsearch_fulltext
+          command. It may also mention that the attribute must be added to
+          search_request.xml if a custom request configuration is in use.

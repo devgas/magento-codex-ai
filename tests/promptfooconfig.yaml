@@ -1,0 +1,50 @@
+# Shared defaults fragment — imported by individual sub-configs via:
+#   import:
+#     - ../promptfooconfig.yaml
+#
+# NOTE: promptfoo's import: directive merges partial config fragments.
+# Each sub-config in skills/ and agents/ is fully self-contained and
+# can be run directly:
+#
+#   npx promptfoo eval --config tests/skills/magento-plugin.yaml
+#
+# To run all tests at once, use the npm scripts:
+#
+#   npm test               — all 140 tests (skills then agents)
+#   npm run test:skills    — all 16 skill configs
+#   npm run test:agents    — all 12 agent configs
+#   npm run test:ci        — all tests with JSON output artefacts
+#
+# Sub-config list (all fully self-contained):
+#
+#   skills/magento-plugin.yaml
+#   skills/magento-db-schema.yaml
+#   skills/magento-debug.yaml
+#   skills/magento-observer.yaml
+#   skills/magento-deploy.yaml
+#   skills/magento-cli-command.yaml
+#   skills/magento-test.yaml
+#   skills/magento-api.yaml
+#   skills/magento-hyva.yaml
+#   skills/magento-infra.yaml
+#   skills/magento-indexer.yaml
+#   skills/magento-cache.yaml
+#   skills/magento-amqp.yaml
+#   skills/magento-sql.yaml
+#   skills/magento-search.yaml
+#   skills/magento-cron.yaml
+#   agents/magento-bug-triage.yaml
+#   agents/magento-code-review.yaml
+#   agents/magento-deployment.yaml
+#   agents/magento-performance-auditor.yaml
+#   agents/magento-api-builder.yaml
+#   agents/magento-module-generator.yaml
+#   agents/magento-indexer.yaml
+#   agents/magento-cache.yaml
+#   agents/magento-amqp.yaml
+#   agents/magento-sql.yaml
+#   agents/magento-search.yaml
+#   agents/magento-cron.yaml
+
+description: Magento AI Toolkit — shared test defaults
+

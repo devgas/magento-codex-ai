@@ -1,0 +1,15 @@
+{
+  "name": "magento-codex-ai",
+  "version": "1.0.0",
+  "description": "Codex-first Magento 2 and Mage-OS prompt toolkit",
+  "private": false,
+  "scripts": {
+    "test": "node --test tests/structure.test.mjs",
+    "test:promptfoo": "npm run test:promptfoo:skills && npm run test:promptfoo:agents",
+    "test:promptfoo:skills": "npx promptfoo@latest eval --config tests/skills/magento-plugin.yaml --config tests/skills/magento-db-schema.yaml --config tests/skills/magento-debug.yaml --config tests/skills/magento-observer.yaml --config tests/skills/magento-deploy.yaml --config tests/skills/magento-cli-command.yaml --config tests/skills/magento-test.yaml --config tests/skills/magento-api.yaml --config tests/skills/magento-hyva.yaml --config tests/skills/magento-infra.yaml --config tests/skills/magento-indexer.yaml --config tests/skills/magento-cache.yaml --config tests/skills/magento-amqp.yaml --config tests/skills/magento-sql.yaml --config tests/skills/magento-search.yaml --config tests/skills/magento-cron.yaml --max-concurrency 1",
+    "test:promptfoo:agents": "npx promptfoo@latest eval --config tests/agents/magento-bug-triage.yaml --config tests/agents/magento-code-review.yaml --config tests/agents/magento-deployment.yaml --config tests/agents/magento-performance-auditor.yaml --config tests/agents/magento-api-builder.yaml --config tests/agents/magento-module-generator.yaml --config tests/agents/magento-indexer.yaml --config tests/agents/magento-cache.yaml --config tests/agents/magento-amqp.yaml --config tests/agents/magento-sql.yaml --config tests/agents/magento-search.yaml --config tests/agents/magento-cron.yaml --max-concurrency 1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

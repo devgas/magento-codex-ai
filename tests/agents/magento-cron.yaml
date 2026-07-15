@@ -1,0 +1,190 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for agents/magento-agent-cron.md
+
+prompts:
+  - file://../prompts/agent-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 150000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Dispatcher down — agent identifies environment, checks OS crontab"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-cron/SKILL.md"
+      user_input: >
+        cron_schedule has been empty for the last hour. No new rows are being
+        inserted. Nothing in var/log/cron.log either. We're on a self-hosted
+        VM running Ubuntu. Diagnose.
+    assert:
+      - type: contains
+        value: "## Cron Report"
+      - type: contains
+        value: "**Mode**"
+      - type: contains
+        value: "**Environment**"
+      - type: contains
+        value: "**Investigated**"
+      - type: contains
+        value: "**Root Cause"
+      - type: contains
+        value: "**Verification**"
+      - type: regex
+        value: "crontab -l|cron:install|systemctl|journalctl"
+      - type: llm-rubric
+        value: >
+          The Cron Report identifies the environment as on-prem
+          (self-hosted VM). The Investigated section includes checking
+          crontab -l (or systemctl status cron / journalctl -u cron) and
+          confirming whether bin/magento cron:install has been run. The
+          Root Cause is specific — e.g. OS crontab missing, cron daemon
+          stopped, env.php broken on bootstrap. The Fix is concrete
+          (bin/magento cron:install OR systemctl start cron). The Verification
+          confirms cron_schedule rows reappear within a few minutes.
+
+  - description: "Refuses TRUNCATE cron_schedule, recommends history_*_lifetime tuning"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-cron/SKILL.md"
+      user_input: >
+        cron_schedule has 6 million rows and queries against it are extremely
+        slow. Just TRUNCATE it for me — that's the fastest way to clean up,
+        right?
+    assert:
+      - type: contains
+        value: "## Cron Report"
+      - type: contains
+        value: "**Root Cause"
+      - type: regex
+        value: "history_success_lifetime|history_failure_lifetime|history_cleanup_every"
+      # "TRUNCATE cron_schedule" must not be RECOMMENDED. The model is allowed
+      # to quote the phrase to refuse it; we require a refusal/negation marker
+      # in the 250 chars preceding each occurrence.
+      - type: javascript
+        value: |
+          const phrase = "TRUNCATE cron_schedule";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|dangerous|refuse[ds]?|refusing)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal/negation marker anywhere — model is recommending it" };
+      - type: llm-rubric
+        value: >
+          The agent refuses TRUNCATE cron_schedule and explains that it would
+          convert pending rows into lost work. The Fix tunes
+          history_success_lifetime (and possibly history_failure_lifetime) in
+          cron_groups.xml, lets the cleanup job catch up, and may suggest
+          batched DELETEs scoped to status='success' rows older than a day,
+          looped, off-peak — never TRUNCATE. The Root Cause names retention
+          mis-tuning (history_success_lifetime too high) or a failing
+          cleanup task as the underlying issue.
+
+  - description: "Adobe Commerce Cloud — refuses cron:install, advises .magento.app.yaml"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-cron/SKILL.md"
+      user_input: >
+        We're on Adobe Commerce Cloud. Cron jobs aren't running on production.
+        Should I SSH in and run bin/magento cron:install on the cron container?
+    assert:
+      - type: contains
+        value: "## Cron Report"
+      - type: contains
+        value: ".magento.app.yaml"
+      - type: regex
+        value: "no-op|don't|do not|not.*recommended|crons:"
+      - type: llm-rubric
+        value: >
+          The Cron Report identifies the environment as Adobe Commerce Cloud
+          and explicitly refuses to recommend bin/magento cron:install
+          because it is a no-op on Cloud. The Fix directs the user to the
+          crons: block in .magento.app.yaml (with spec and cmd fields) and,
+          if relevant, CRON_CONSUMERS_RUNNER in .magento.env.yaml. It notes
+          that Cloud pins cron to a single container so distributed-cron
+          concerns don't apply.
+
+  - description: "Consumer-runner not draining — Investigated traces to the consumers cron group"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-cron/SKILL.md"
+      user_input: >
+        cron_consumers_runner.cron_run is true in env.php and our RabbitMQ
+        queues are growing — async.operations.all is at 23k. ps aux shows no
+        queue:consumers:start processes running. Diagnose.
+    assert:
+      - type: contains
+        value: "## Cron Report"
+      - type: contains
+        value: "**Investigated**"
+      - type: contains
+        value: "**Root Cause"
+      - type: regex
+        value: "consumers_runner|consumers cron group|--group=consumers"
+      - type: llm-rubric
+        value: >
+          The Cron Report's Investigated section queries cron_schedule for
+          job_code='consumers_runner' to confirm whether the runner job is
+          actually being dispatched. The Root Cause is one of: the consumers
+          cron group is not being run (e.g. OS crontab only invokes
+          --group=default), max_messages is unset so consumers OOM-die, or
+          consumers: whitelist excludes the impacted consumer. The Fix is
+          concrete (run all groups OR add --group=consumers; set
+          max_messages=1000; set consumers=[]). The agent does NOT blame the
+          broker without checking that the runner job is being dispatched
+          first.
+
+  - description: "Scaffold a new cron job — crontab.xml, handler, post-scaffold commands"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-cron/SKILL.md"
+      user_input: >
+        Scaffold a new cron job: name vendor_module_inventory_sync, runs every
+        4 hours, admin should be able to retune the schedule without a deploy.
+        Handler is Vendor\Module\Cron\InventorySync::execute. Group default.
+    assert:
+      - type: contains
+        value: "## Cron Report"
+      - type: contains
+        value: "crontab.xml"
+      - type: contains
+        value: "config_path"
+      - type: contains
+        value: "system.xml"
+      - type: contains
+        value: "config.xml"
+      - type: contains
+        value: "declare(strict_types=1)"
+      - type: regex
+        value: "setup:upgrade|setup:di:compile"
+      # ObjectManager::getInstance must not be RECOMMENDED. The model is
+      # allowed to mention it inside a refusal ("don't use
+      # ObjectManager::getInstance — inject via constructor"). Require a
+      # refusal/negation marker in the 250 chars preceding each occurrence.
+      - type: javascript
+        value: |
+          const phrase = "ObjectManager::getInstance";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|refuse[ds]?|refusing|anti.?pattern|deprecated|legacy|inject)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal/anti-pattern context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal, anti-pattern, or constructor-injection marker anywhere — model is recommending the anti-pattern" };
+      - type: llm-rubric
+        value: >
+          The scaffold includes etc/crontab.xml using <config_path> (not a
+          literal <schedule>), etc/config.xml with the default cron expression
+          for that path, etc/adminhtml/system.xml with the admin field for
+          editing, and the handler PHP class with declare(strict_types=1) and
+          constructor injection (no ObjectManager). The post-scaffold
+          commands include setup:upgrade, setup:di:compile, and cache:clean
+          config so the new schedule takes effect, plus a verification SQL
+          query against cron_schedule.

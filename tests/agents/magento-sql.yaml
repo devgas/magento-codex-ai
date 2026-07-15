@@ -1,0 +1,162 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for agents/magento-agent-sql.md
+
+prompts:
+  - file://../prompts/agent-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 150000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Slow query traced to missing composite index; proposed via db_schema.xml + whitelist"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-sql/SKILL.md"
+      user_input: >
+        This query takes 9.4 seconds:
+          SELECT * FROM vendor_audit_log
+           WHERE store_id = 3
+             AND event_type = 'login'
+             AND created_at >= NOW() - INTERVAL 7 DAY
+           ORDER BY created_at DESC LIMIT 100;
+        The table has 14M rows. SHOW INDEX shows only PRIMARY KEY on entity_id.
+        Please diagnose and propose a fix.
+    assert:
+      - type: contains
+        value: "## SQL Report"
+      - type: contains
+        value: "**Mode**"
+      - type: contains
+        value: "**Investigated**"
+      - type: contains
+        value: "**Root Cause"
+      - type: contains
+        value: "**Verification**"
+      - type: contains
+        value: "db_schema.xml"
+      - type: regex
+        value: "store_id.*event_type.*created_at|composite|multi-column"
+      - type: llm-rubric
+        value: >
+          The SQL Report identifies a missing composite index ordered with
+          equality columns first, range column last (e.g. store_id,
+          event_type, created_at). The Fix proposes the change via
+          db_schema.xml with an <index> entry and a referenceId following the
+          VENDOR_MODULE_TABLE_COLUMN naming convention, and includes the
+          db_schema_whitelist.json regeneration step. If the agent ALSO
+          mentions a manual ALTER TABLE (as an escape hatch for the 14M-row
+          table), that is acceptable ONLY when ALGORITHM=INSTANT (or
+          equivalent online-DDL clause) is explicit, engine/version
+          compatibility is checked, and db_schema.xml + whitelist are updated
+          in the same deploy. A blanket "run ALTER TABLE on production"
+          without those conditions fails. The Verification re-runs EXPLAIN to
+          confirm the new index is used (key column populated, rows examined
+          drops by orders of magnitude).
+
+  - description: "Engine detection — MySQL 8 vs MariaDB before recommending INSTANT DDL"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-sql/SKILL.md"
+      user_input: >
+        I want to add a NULLABLE varchar column to sales_order_grid (~28M rows)
+        in production with zero downtime. Can ALGORITHM=INSTANT work?
+    assert:
+      - type: contains
+        value: "## SQL Report"
+      - type: contains
+        value: "**Investigated**"
+      - type: regex
+        value: "SELECT VERSION|MySQL|MariaDB|@@version"
+      - type: regex
+        value: "INSTANT|ALGORITHM"
+      - type: llm-rubric
+        value: >
+          The agent demonstrates that it would detect the engine and version
+          (e.g. by running SELECT VERSION() or reading @@version) BEFORE
+          recommending INSTANT DDL. It correctly distinguishes MySQL 8.0
+          (broad INSTANT support including most ADD COLUMN) from MariaDB
+          (narrower INSTANT support, especially before 10.6). It either
+          confirms INSTANT is feasible on the detected engine or proposes an
+          alternative — gh-ost / pt-online-schema-change, or a maintenance
+          window. The Fix routes the change through db_schema.xml + whitelist
+          regeneration even when the underlying ALTER will run as INSTANT.
+
+  - description: "Deadlock diagnosis recommends retry loop, refuses to raise innodb_lock_wait_timeout as primary fix"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-sql/SKILL.md"
+      user_input: >
+        Our import job throws "Deadlock found when trying to get lock; try
+        restarting transaction" on about 1% of inserts into
+        catalog_product_index_price. We've raised innodb_lock_wait_timeout from
+        50 to 300 and it didn't help. What now?
+    assert:
+      - type: contains
+        value: "## SQL Report"
+      - type: contains
+        value: "**Root Cause"
+      - type: regex
+        value: "DeadlockException|retry|backoff|locking order"
+      - type: llm-rubric
+        value: >
+          The SQL Report identifies the absence of a deadlock-retry loop as
+          the root cause (deadlocks are normal under contention; the
+          application must retry). The Fix shows catching
+          \Magento\Framework\DB\Adapter\DeadlockException and retrying with
+          jittered backoff (3-5 attempts). The agent does NOT recommend
+          raising innodb_lock_wait_timeout as the primary fix — the report
+          should call out that lock-wait timeout addresses a different issue
+          (slow lock acquisition) and not deadlock victim retries. It may
+          additionally recommend consistent locking order across writers.
+
+  - description: "Refuses to edit vendor/, recommends plugin or preference"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-sql/SKILL.md"
+      user_input: >
+        The slow query comes from vendor/magento/module-sales/Model/ResourceModel/Order/Grid.php.
+        Can you edit that file to add an index hint?
+    assert:
+      - type: contains
+        value: "## SQL Report"
+      - type: regex
+        value: "plugin|preference|around|before|after|rewrite"
+      - type: llm-rubric
+        value: >
+          The agent refuses to edit vendor/ files and instead proposes a
+          Magento extension mechanism — a plugin (interceptor) or a
+          preference rewriting the resource model class — kept in app/code.
+          It explains that vendor/ edits would be wiped by the next composer
+          update. The agent may also propose adding the index via db_schema.xml
+          rather than chasing an index hint, since indexes are a persistent
+          schema concern.
+
+  - description: "Refuses to drop index directly; schema must flow through db_schema.xml + whitelist"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-sql/SKILL.md"
+      user_input: >
+        Drop the unused index VENDOR_MODULE_RECORD_OLD_FLAG on
+        vendor_module_record. Just run the DROP INDEX directly on production —
+        we need it gone now.
+    assert:
+      - type: contains
+        value: "## SQL Report"
+      - type: contains
+        value: "db_schema.xml"
+      - type: regex
+        value: "whitelist|generate-whitelist"
+      - type: llm-rubric
+        value: >
+          The agent refuses to run DROP INDEX directly. It instructs the user
+          to remove the <index referenceId=...> entry from db_schema.xml and
+          regenerate db_schema_whitelist.json so setup:upgrade applies the
+          drop. It may suggest making the index INVISIBLE first as a
+          reversible test (MySQL 8.0+) before the permanent drop. It explains
+          that running raw ALTER TABLE DROP INDEX bypasses Magento's
+          declarative schema state and the index would re-appear on the next
+          setup:upgrade if it is still declared.

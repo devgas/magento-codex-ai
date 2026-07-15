@@ -1,0 +1,155 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for skills/magento-sql.md
+
+prompts:
+  - file://../prompts/skill-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 120000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Schema changes flow through db_schema.xml + whitelist regen, with INSTANT-ALTER escape hatch documented"
+    vars:
+      system_prompt: "file://../../skills/magento-sql/SKILL.md"
+      user_input: >
+        I need to add a new indexed column "external_ref" to the
+        vendor_module_record table. What's the right way to do this in Magento 2?
+    assert:
+      - type: contains
+        value: "db_schema.xml"
+      - type: contains
+        value: "db_schema_whitelist.json"
+      - type: regex
+        value: "setup:db-declaration:generate-whitelist|generate-whitelist"
+      # ObjectManager::getInstance must not be RECOMMENDED. Allowed inside a
+      # refusal/anti-pattern context.
+      - type: javascript
+        value: |
+          const phrase = "ObjectManager::getInstance";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|refuse[ds]?|refusing|anti.?pattern|deprecated|legacy|inject)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal/anti-pattern context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used with no refusal or anti-pattern marker — model is recommending the anti-pattern" };
+      - type: llm-rubric
+        value: >
+          The response presents db_schema.xml + regenerated db_schema_whitelist.json
+          as the DEFAULT path for the schema change. It shows the correct <column>
+          and <index> XML, names a referenceId following the
+          VENDOR_MODULE_TABLE_COLUMN convention, and includes the bin/magento
+          setup:db-declaration:generate-whitelist command followed by
+          setup:upgrade. If the response also discusses a manual ALTER TABLE
+          (e.g. as an escape hatch for huge tables), that is acceptable ONLY
+          when ALL of the following are present: (a) the ALTER explicitly
+          specifies an online-DDL algorithm — ALGORITHM=INSTANT for INSTANT-
+          eligible operations (e.g. adding a column at the end), or
+          ALGORITHM=INPLACE with LOCK=NONE for operations that are not
+          INSTANT-eligible (e.g. adding an index in MySQL 8 — INSTANT does not
+          support index creation). The combined ADD COLUMN + ADD INDEX in one
+          ALTER will run as INPLACE because the least-online sub-operation
+          dictates the algorithm; that is correct. (b) engine / version
+          compatibility for the chosen algorithm is called out. (c)
+          db_schema.xml and the whitelist are updated to match in the same
+          deploy so setup:upgrade no-ops. A blanket "just run ALTER TABLE"
+          without those three conditions fails. A response that omits any
+          mention of raw ALTER and uses only the declarative path also passes.
+
+  - description: "Composite index column ordering — equality columns before range columns"
+    vars:
+      system_prompt: "file://../../skills/magento-sql/SKILL.md"
+      user_input: >
+        I have a query: SELECT * FROM vendor_log WHERE store_id = 1
+        AND created_at BETWEEN '2025-01-01' AND '2025-01-31' ORDER BY created_at.
+        What composite index should I add and in what column order?
+    assert:
+      - type: regex
+        value: "store_id.*created_at|equality.*range"
+      - type: llm-rubric
+        value: >
+          The response recommends a composite index ordered (store_id, created_at)
+          — equality column first, range column second — and explains why this
+          ordering allows the index to be used for both the WHERE filter and the
+          ORDER BY clause. It mentions the left-prefix rule and the principle that
+          equality predicates should precede range predicates in composite indexes.
+
+  - description: "Batch operations — insertOnDuplicate / insertFromSelect over per-row save() loops"
+    vars:
+      system_prompt: "file://../../skills/magento-sql/SKILL.md"
+      user_input: >
+        I'm importing 50,000 product attribute values in a foreach loop calling
+        $resource->save() per row, and it takes 40 minutes. How do I make this fast?
+    assert:
+      - type: regex
+        value: "insertOnDuplicate|insertMultiple|insertFromSelect|insertArray"
+      # ObjectManager::getInstance must not be RECOMMENDED. Allowed inside a
+      # refusal/anti-pattern/inject context.
+      - type: javascript
+        value: |
+          const phrase = "ObjectManager::getInstance";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|refuse[ds]?|refusing|anti.?pattern|deprecated|legacy|inject)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal/anti-pattern context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used with no refusal or anti-pattern marker — model is recommending the anti-pattern" };
+      - type: llm-rubric
+        value: >
+          The response recommends switching from a per-row save() loop to a
+          batch operation — insertOnDuplicate (for upserts), insertMultiple,
+          or insertFromSelect (for set-based copies). It explains the
+          performance gain (typically 100x or more) and shows a concrete
+          example using AdapterInterface from the ResourceConnection. It may
+          also mention transactions and chunking large batches.
+
+  - description: "Deadlock recovery — retry loop with DeadlockException and jittered backoff"
+    vars:
+      system_prompt: "file://../../skills/magento-sql/SKILL.md"
+      user_input: >
+        Our import gets occasional "Deadlock found when trying to get lock"
+        errors, killing the whole job. Should we raise innodb_lock_wait_timeout?
+    assert:
+      - type: regex
+        value: "DeadlockException|retry|backoff"
+      - type: llm-rubric
+        value: >
+          The response identifies a deadlock-retry loop (catching
+          \Magento\Framework\DB\Adapter\DeadlockException, retrying 3-5 times
+          with jittered backoff) as the correct fix, not raising
+          innodb_lock_wait_timeout. It explains that lock-wait timeout hides the
+          symptom and may also flag locking-order discipline (always touch tables
+          in the same order) as a deadlock-prevention measure. Raising the
+          timeout is not presented as the primary fix.
+
+  - description: "MySQL 8 vs MariaDB divergence — INSTANT DDL coverage differs"
+    vars:
+      system_prompt: "file://../../skills/magento-sql/SKILL.md"
+      user_input: >
+        I'm adding a column to a 30-million-row sales_order_grid-style table and
+        I want zero downtime. We're on MariaDB 10.6. Will ALGORITHM=INSTANT work?
+    assert:
+      - type: regex
+        value: "MariaDB|MySQL 8|INSTANT"
+      - type: llm-rubric
+        value: >
+          The response distinguishes MySQL 8.0 from MariaDB 10.6 with respect to
+          INSTANT DDL: MySQL 8.0 supports a much wider range of ALGORITHM=INSTANT
+          operations (including adding most columns), while MariaDB 10.6's
+          INSTANT support is more limited. It either confirms that adding a
+          column is INSTANT-eligible on MariaDB 10.6 with caveats (only at the
+          end of the row, no default expression) or recommends a maintenance
+          window / online schema change tool (gh-ost, pt-online-schema-change)
+          if the operation can't be INSTANT on the user's engine.

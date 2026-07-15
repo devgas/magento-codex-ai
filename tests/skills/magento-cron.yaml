@@ -1,0 +1,153 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for skills/magento-cron.md
+
+prompts:
+  - file://../prompts/skill-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 120000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Two-file model — crontab.xml plus optional cron_groups.xml; literal vs config_path schedule"
+    vars:
+      system_prompt: "file://../../skills/magento-cron/SKILL.md"
+      user_input: >
+        I want to schedule a job that runs every day at 02:00 to export inventory
+        to a CSV. Show me the Magento 2 cron job declaration.
+    assert:
+      - type: contains
+        value: "crontab.xml"
+      - type: regex
+        value: "<schedule>0 2 \\* \\* \\*</schedule>|<schedule>0 2|<job name="
+      - type: contains
+        value: "declare(strict_types=1)"
+      # ObjectManager::getInstance must not be RECOMMENDED. The model is
+      # allowed to quote the phrase inside a refusal ("don't use
+      # ObjectManager::getInstance — inject via constructor"), so we look for
+      # a refusal/negation marker in the 250 chars preceding each occurrence.
+      - type: javascript
+        value: |
+          const phrase = "ObjectManager::getInstance";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|refuse[ds]?|refusing|anti.?pattern|deprecated|legacy|inject)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal/anti-pattern context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal, anti-pattern, or constructor-injection marker anywhere — model is recommending the anti-pattern" };
+      - type: llm-rubric
+        value: >
+          The response shows etc/crontab.xml with a <group id="default">
+          containing a <job> with the literal <schedule>0 2 * * *</schedule>
+          cron expression. It also shows the handler PHP class with
+          declare(strict_types=1), constructor injection (no ObjectManager),
+          and a public execute() method. The literal-schedule pattern is
+          sufficient given the user asked for a fixed daily 02:00 schedule;
+          mentioning the <config_path> admin-editable alternative is welcome
+          bonus context but not required for a passing answer.
+
+  - description: "Never TRUNCATE cron_schedule — bloat is a history_*_lifetime tuning problem"
+    vars:
+      system_prompt: "file://../../skills/magento-cron/SKILL.md"
+      user_input: >
+        Our cron_schedule table has 8 million rows and queries against it are
+        slow. Can I just TRUNCATE it to clean up?
+    assert:
+      - type: regex
+        value: "history_success_lifetime|history_failure_lifetime|history_cleanup_every"
+      # "TRUNCATE cron_schedule" must not be RECOMMENDED. The model is allowed
+      # to quote the phrase to refuse it ("don't TRUNCATE cron_schedule —
+      # tune history_*_lifetime instead"), so we require a refusal/negation
+      # marker in the 250 chars preceding each occurrence.
+      - type: javascript
+        value: |
+          const phrase = "TRUNCATE cron_schedule";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|dangerous|refuse[ds]?|refusing)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal/negation marker anywhere — model is recommending it" };
+      - type: llm-rubric
+        value: >
+          The response refuses TRUNCATE cron_schedule because it would convert
+          all pending rows into lost work (jobs that should have run never run).
+          It identifies the real fix as tuning history_success_lifetime and/or
+          history_failure_lifetime in cron_groups.xml so cleanup catches up.
+          For a one-time cleanup of a 100M-row table it may suggest controlled
+          batched DELETEs scoped to status='success' rows older than a day,
+          looped, off-peak. TRUNCATE is presented as the wrong tool.
+
+  - description: "consumer_runner requires max_messages; never run forever"
+    vars:
+      system_prompt: "file://../../skills/magento-cron/SKILL.md"
+      user_input: >
+        How do I configure cron_consumers_runner in env.php so cron starts our
+        RabbitMQ consumers? Anything I need to be careful with?
+    assert:
+      - type: contains
+        value: "max_messages"
+      - type: contains
+        value: "cron_consumers_runner"
+      - type: llm-rubric
+        value: >
+          The response shows the cron_consumers_runner block in env.php with
+          cron_run=true, max_messages set to a finite value (e.g. 1000), and
+          consumers either as an empty array (all) or a whitelist. It explains
+          that max_messages MUST be set in production — without it, consumers
+          run forever, leak memory, and get OOM-killed by the kernel. It may
+          also mention multiple_processes for hot, idempotent consumers.
+
+  - description: "Distributed cron — only one node should run cron in multi-node deploys"
+    vars:
+      system_prompt: "file://../../skills/magento-cron/SKILL.md"
+      user_input: >
+        We have a 3-node Magento deployment behind a load balancer. Should every
+        node run cron, or just one?
+    assert:
+      - type: regex
+        value: "one node|single node|hostname|web1|leader"
+      - type: llm-rubric
+        value: >
+          The response states that only ONE node should run cron in a
+          multi-node deployment, even though row-level locking on cron_schedule
+          would prevent double-execution of an individual job. It explains the
+          reasoning: multiple cron daemons multiply DB load and risk
+          dispatcher / cleanup races. It shows or describes a hostname-guard
+          pattern in the OS crontab — e.g. [ "$(hostname -s)" = "web1" ] && ...
+          — as the simplest leadership mechanism. For Adobe Commerce Cloud and
+          Kubernetes it notes that the platform pins cron to one container or a
+          single replica.
+
+  - description: "Adobe Commerce Cloud uses .magento.app.yaml crons:, not bin/magento cron:install"
+    vars:
+      system_prompt: "file://../../skills/magento-cron/SKILL.md"
+      user_input: >
+        We're on Adobe Commerce Cloud. How do I add a cron job? Should I run
+        bin/magento cron:install on the cloud container?
+    assert:
+      - type: contains
+        value: ".magento.app.yaml"
+      - type: regex
+        value: "crons:|spec:|cmd:"
+      - type: llm-rubric
+        value: >
+          The response identifies that on Adobe Commerce Cloud, cron is wired
+          via the crons: block in .magento.app.yaml (with spec and cmd fields),
+          not through the OS crontab. It states that bin/magento cron:install
+          is a no-op on Cloud and should NOT be run. It mentions that
+          .magento.env.yaml controls CRON_CONSUMERS_RUNNER for queue consumers,
+          and that the platform pins cron to a single container so
+          distributed-cron concerns don't apply.

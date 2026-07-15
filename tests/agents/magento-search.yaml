@@ -1,0 +1,168 @@
+import:
+  - ../promptfooconfig.yaml
+
+description: Tests for agents/magento-agent-search.md
+
+prompts:
+  - file://../prompts/agent-wrapper.json
+
+providers:
+  - file://../providers.yaml
+
+defaultTest:
+  assert:
+    - type: latency
+      threshold: 150000
+    - type: javascript
+      value: "output.trim().length > 50"
+
+tests:
+  - description: "Missing-doc diagnosis — engine + version detected, indexer state checked"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-search/SKILL.md"
+      user_input: >
+        SKU AC-RED-M is enabled, in stock, assigned to the website, but doesn't
+        appear in search results. Other products from the same category do
+        show up. Please diagnose.
+    assert:
+      - type: contains
+        value: "## Search Report"
+      - type: contains
+        value: "**Engine**"
+      - type: contains
+        value: "**Investigated**"
+      - type: contains
+        value: "**Root Cause"
+      - type: contains
+        value: "**Verification**"
+      - type: regex
+        value: "indexer:status|catalogsearch_fulltext|reindex"
+      - type: llm-rubric
+        value: >
+          The Search Report includes Engine (elasticsearch7/8 or opensearch)
+          and version, and Cluster Health. The Investigated section probes
+          whether the document exists in the live alias
+          (magento2_product_<storeId>) and checks catalogsearch_fulltext
+          indexer status. The Root Cause is specific — e.g. doc not yet
+          reindexed since save, attribute is_searchable=0, search_request.xml
+          excludes the field, or stock_status filter hiding it. The
+          Verification re-runs the storefront search or queries the index by
+          SKU after the fix.
+
+  - description: "ES 8 401 — agent refuses enable_auth=0 fix, requires credentials"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-search/SKILL.md"
+      user_input: >
+        We just upgraded our cluster from ES 7.17 to ES 8.13 and Magento now
+        throws "[401] security_exception" on every search. Setting
+        elasticsearch8_enable_auth to 0 in env.php sounds quick — is that the
+        fix?
+    assert:
+      - type: contains
+        value: "## Search Report"
+      - type: contains
+        value: "**Root Cause"
+      - type: regex
+        value: "enable_auth.*1|credentials|username|password"
+      # "enable_auth => 0" must not be RECOMMENDED. The model is allowed to
+      # quote the value when refusing it. Require a refusal/negation marker in
+      # the 250 chars preceding each occurrence.
+      - type: javascript
+        value: |
+          const phrase = "enable_auth => 0";
+          if (!output.includes(phrase)) {
+            return { pass: true, score: 1, reason: phrase + " absent from output" };
+          }
+          const markers = /\b(no|not|never|don't|do not|won't|will not|cannot|can't|avoid|wrong|instead|harmful|dangerous|refuse[ds]?|refusing)\b/i;
+          if (markers.test(output)) {
+            return { pass: true, score: 1, reason: phrase + " mentioned but refusal context found globally" };
+          }
+          return { pass: false, score: 0, reason: phrase + " used in output with no refusal/negation marker anywhere — model is recommending disabling auth" };
+      - type: llm-rubric
+        value: >
+          The agent explicitly refuses to set enable_auth=0 as the fix. The
+          Root Cause identifies ES 8's security-on-by-default — credentials
+          are mandatory in 8.x. The Fix sets elasticsearch8_enable_auth=1
+          plus elasticsearch8_username and elasticsearch8_password (or uses
+          bin/magento config:set --encrypt). The response makes clear that
+          disabling auth is the wrong remediation.
+
+  - description: "Disk-watermark — free disk first, then clear the read-only block"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-search/SKILL.md"
+      user_input: >
+        Reindex is failing with "FORBIDDEN/12/index read-only / allow delete
+        (api)". Indices show
+        index.blocks.read_only_allow_delete: true.
+        Can I just clear that flag?
+    assert:
+      - type: contains
+        value: "## Search Report"
+      - type: contains
+        value: "**Root Cause"
+      - type: regex
+        value: "watermark|disk|free|allocation"
+      - type: llm-rubric
+        value: >
+          The Search Report identifies the disk high watermark (default 95%)
+          being breached as the root cause. The Fix orders the steps: FIRST
+          free disk space (delete obsolete _vN indices that aren't aliased,
+          expand the volume), THEN clear the read_only_allow_delete block via
+          PUT /<index>/_settings. The agent explicitly warns that clearing
+          the block before freeing disk will cause the watermark to trip
+          again within minutes.
+
+  - description: "Migration advisory — ES 7 vs ES 8 vs OpenSearch decision tree"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-search/SKILL.md"
+      user_input: >
+        We're on Magento 2.4.6 with ES 7.17 self-hosted. We want to upgrade
+        the search engine. Should we go to ES 8 or OpenSearch 2.x? Licensing
+        matters to us.
+    assert:
+      - type: contains
+        value: "## Search Report"
+      - type: regex
+        value: "Apache 2.0|SSPL|Elastic License|licensing"
+      - type: regex
+        value: "OpenSearch|opensearch"
+      - type: llm-rubric
+        value: >
+          The agent recommends OpenSearch 2.x as the migration target and
+          explicitly notes that BOTH the elasticsearch7 and elasticsearch8
+          Magento modules are deprecated by Adobe — OpenSearch is the
+          strategic forward path regardless of licensing. The licensing point
+          (ES is Elastic License 2.0 / SSPL, not OSI-approved; OpenSearch is
+          Apache 2.0) is a reinforcing reason, not the only one. ES 8 is NOT
+          recommended as a target — it is described as a deprecated short-term
+          holdover that would force a second migration. The agent outlines the
+          migration plan: stand up the new cluster alongside, point a non-prod
+          Magento at it, reindex, smoke-test, cut over by changing
+          catalog/search/engine, full reindex, decommission. It notes that
+          Magento rebuilds indices from the source DB, so a reindex is
+          mandatory.
+
+  - description: "AWS OpenSearch Service env.php — pragmatic basic auth, not SigV4-first"
+    vars:
+      system_prompt: "file://../../agent-skills/magento-agent-search/SKILL.md"
+      user_input: >
+        We just provisioned an AWS OpenSearch Service domain with a master
+        user. What env.php block do we paste into Magento to point it at the
+        new endpoint?
+    assert:
+      - type: contains
+        value: "## Search Report"
+      - type: contains
+        value: "443"
+      - type: regex
+        value: "opensearch_username|enable_auth|opensearch_password"
+      - type: llm-rubric
+        value: >
+          The agent leads with the working env.php block: engine=opensearch,
+          opensearch_server_hostname set to the AWS domain endpoint,
+          opensearch_server_port=443, opensearch_enable_auth=1,
+          opensearch_username and opensearch_password for the master user
+          (basic auth over HTTPS). SigV4 / IAM signing is treated as a niche
+          aside if mentioned at all, NOT as a precondition. VPC and IAM-policy
+          plumbing are not presented as required steps for the working
+          connection.
