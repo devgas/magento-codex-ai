@@ -7,7 +7,7 @@ prompts:
   - file://../prompts/agent-wrapper.json
 
 providers:
-  - file://../providers.yaml
+  - file://../providers.deep-agents.yaml
 
 defaultTest:
   assert:

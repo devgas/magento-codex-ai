@@ -14,4 +14,8 @@ Codex-first prompt library for Magento 2 and Mage-OS.
 - Keep workflow prompts in `agent-skills/<agent-name>/SKILL.md`
 - When adding or removing skills, update `README.md`, `package.json`, and `tests/structure.test.mjs`
 - Do not add Claude-only paths or Anthropic-only provider defaults to operational docs or tests
+- Keep promptfoo model profiles aligned with workload:
+  `tests/providers.skills.yaml` for stateless skills,
+  `tests/providers.agents.yaml` for standard agents,
+  `tests/providers.deep-agents.yaml` for deep review and diagnostic agents
 - Preserve upstream Magento content unless there is a concrete correctness or Codex-compatibility issue

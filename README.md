@@ -32,13 +32,19 @@ Open any `SKILL.md` file and paste it as a system prompt, or point your own tool
 
 ### Optional prompt evaluation
 
-The repo still ships promptfoo configs, but they are now OpenAI-only and opt-in:
+The repo still ships promptfoo configs, but they are OpenAI-only and split by workload profile:
 
 ```bash
 npm run test:promptfoo
 ```
 
 Set `OPENAI_API_KEY` before running promptfoo-based tests.
+
+Current model mapping:
+
+- `skills/*`: `gpt-5.6-terra` with `reasoning.effort: low`
+- most `agent-skills/*`: `gpt-5.6-terra` with `reasoning.effort: medium`
+- deep review agents (`code-review`, `performance-auditor`, `search`, `sql`, `cron`): `gpt-5.6` with `reasoning.effort: high`
 
 ## Structure
 
@@ -67,7 +73,8 @@ magento-codex-ai/
 - Removed Claude-native subagent packaging from the delivered repo shape
 - Switched installation docs to `~/.codex/skills`
 - Fixed broken companion-skill links in `agent-skills/`
-- Replaced Anthropic promptfoo provider defaults with OpenAI-only defaults
+- Replaced Anthropic promptfoo provider defaults with GPT-5.6-based OpenAI profiles
+- Split providers by workload so skills, standard agents, and deep-review agents do not all use the same reasoning budget
 - Added a local `node:test` suite that validates file counts, frontmatter, links, and Codex-facing docs
 
 ## Attribution

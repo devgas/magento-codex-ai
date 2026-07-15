@@ -7,7 +7,7 @@ prompts:
   - file://../prompts/skill-wrapper.json
 
 providers:
-  - file://../providers.yaml
+  - file://../providers.skills.yaml
 
 defaultTest:
   assert:

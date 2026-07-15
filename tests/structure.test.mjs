@@ -117,8 +117,17 @@ test("operational files are Codex-facing", () => {
 });
 
 test("providers config is OpenAI-only", () => {
-  const providers = read(path.join(repoRoot, "tests", "providers.yaml"));
+  const providerFiles = [
+    "providers.skills.yaml",
+    "providers.agents.yaml",
+    "providers.deep-agents.yaml"
+  ];
 
-  assert.match(providers, /openai:gpt-4o/);
-  assert.ok(!providers.includes("anthropic:"));
+  for (const providerFile of providerFiles) {
+    const providers = read(path.join(repoRoot, "tests", providerFile));
+
+    assert.match(providers, /openai:gpt-5\.6/);
+    assert.ok(!providers.includes("gpt-4o"));
+    assert.ok(!providers.includes("anthropic:"));
+  }
 });
